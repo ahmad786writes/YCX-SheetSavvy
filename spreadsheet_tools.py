@@ -4,10 +4,42 @@ from crewai.tools import BaseTool
 from pydantic import BaseModel, Field
 from typing import Type
 
-# -----------------------
-# Core Function Logic
-# -----------------------
-def get_companies_starting_with(prefix):
+# ----------------------------------
+# Core Function Logic to get Details
+# ----------------------------------
+def get_company_details_exact_match(company_name):
+    company_name = company_name.upper()
+
+    scope = [
+        "https://spreadsheets.google.com/feeds",
+        "https://www.googleapis.com/auth/drive"
+    ]
+
+    creds = ServiceAccountCredentials.from_json_keyfile_name("creds.json", scope)
+    client = gspread.authorize(creds)
+
+    sheet = client.open_by_url(
+        "https://docs.google.com/spreadsheets/d/1Gv6u8ucaP87JpsWu-A0nlo-nQw2LABW6P0TldO8VXkk/edit#gid=0"
+    ).worksheet("Company Details")
+
+    data = sheet.get_all_records(expected_headers=["Company Name"])
+
+    # Return the first exact match (if any), otherwise None
+    filtered = next(
+        (
+            {k.strip(): v.strip() if isinstance(v, str) else v for k, v in row.items()}
+            for row in data
+            if isinstance(row.get("Company Name"), str) and row["Company Name"].strip().upper() == company_name
+        ),
+        None  # Return None if no match is found
+    )
+
+    return filtered
+
+# ---------------------------------------
+# Core Function Logic to get company name
+# ---------------------------------------
+def get_companies_name_starting_with(prefix):
     prefix = prefix.upper()
 
     scope = [
@@ -20,31 +52,27 @@ def get_companies_starting_with(prefix):
 
     sheet = client.open_by_url(
         "https://docs.google.com/spreadsheets/d/1Gv6u8ucaP87JpsWu-A0nlo-nQw2LABW6P0TldO8VXkk/edit#gid=0"
-    ).worksheet("Company List")
+    ).worksheet("Company Details")
 
-    data = sheet.get_all_records(expected_headers=["Company Name "])
+    data = sheet.get_all_records(expected_headers=["Company Name"])
 
-    # Return only exact matches with the prefix (no fallback logic)
-    filtered = [
-        {
-            "Company Name": row["Company Name "].strip(),
-            "Website URL": row.get("Website URL ", "").strip(),
-            "Industry": row.get("Industry ", "").strip(),
-            "Valuation": row.get("Valuation", "").strip(),
-            "Funding Raised($)": row.get("Funding Raised($)", "").strip(),
-            "Headquarters": row.get("Headquarters ", "").strip()
-        }
+    # Return only company names that match the prefix
+    company_names = [
+        row["Company Name"].strip()
         for row in data
-        if isinstance(row["Company Name "], str) and row["Company Name "].upper().startswith(prefix)
+        if isinstance(row.get("Company Name"), str) and row["Company Name"].upper().startswith(prefix)
     ]
 
-    return filtered
+    return company_names
+
 
 # -----------------------
 # Input Schema Definition
 # -----------------------
 class CompanySearchToolInput(BaseModel):
     prefix: str = Field(..., description="The prefix string to match company names with.")
+class CompanyDetailsSearchToolInput(BaseModel):
+    company: str = Field(..., description="The company names of which the details to return.")
 
 # -----------------------
 # CrewAI Tool Class
@@ -58,8 +86,20 @@ class CompanySearchTool(BaseTool):
     args_schema: Type[BaseModel] = CompanySearchToolInput
 
     def _run(self, prefix: str) -> str:
-        companies = get_companies_starting_with(prefix)
+        companies = get_companies_name_starting_with(prefix)
         if not companies:
             return "No matching Companies Found...."
         else:
             return companies
+        
+class CompanyDetailsSearchTool(BaseTool):
+    name: str = "Company Details Extractor"
+    description:str = (
+        "Searches a Google Sheet for an exact company name match. "
+        "Returns complete details for the matched company."
+    )
+    args_schema: Type[BaseModel] = CompanyDetailsSearchToolInput
+
+    def _run(self, company: str) -> str:
+        company_details = get_company_details_exact_match(company)
+        return company_details
